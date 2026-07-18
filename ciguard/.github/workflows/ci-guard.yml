@@ -1,0 +1,56 @@
+name: CI Guard
+
+on:
+  workflow_run:
+    workflows: ["*"]     
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ci-guard action code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --prefix .
+
+      - name: Restore CI history cache
+        id: restore_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ci-guard-data/history.json
+          key: ci-guard-history-${{ github.repository_id }}-${{ github.run_id }}
+          restore-keys: |
+            ci-guard-history-${{ github.repository_id }}-
+
+      - name: Report cache status
+        run: |
+          if [ -f ci-guard-data/history.json ]; then
+            echo "History restored ($(wc -c < ci-guard-data/history.json) bytes)"
+          else
+            echo "No prior history found — starting fresh"
+          fi
+
+
+      - name: Analyze build times
+        id: analyze
+        env:
+          CI_GUARD_HISTORY_PATH: ci-guard-data/history.json
+        run: node scripts/analyze.js
+      - name: Save updated CI history cache
+        if: always() && steps.analyze.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ci-guard-data/history.json
+          key: ci-guard-history-${{ github.repository_id }}-${{ github.run_id }}
