@@ -1,0 +1,80 @@
+name: "CI Guard"
+description: "Detects CI build-time regressions and posts a trend report on PRs"
+author: "your-name"
+
+branding:
+  icon: "activity"
+  color: "blue"
+
+inputs:
+  github-token:
+    description: "GitHub token with contents:read, pull-requests:write, actions:read"
+    required: true
+  regression-threshold:
+    description: "Percent slower than baseline to flag as a regression"
+    required: false
+    default: "15"
+  baseline-window:
+    description: "Number of recent runs to average for the baseline"
+    required: false
+    default: "10"
+
+outputs:
+  is_regression:
+    description: "true if this run regressed beyond the threshold"
+    value: ${{ steps.analyze.outputs.is_regression }}
+  percent_change:
+    description: "Percent change vs baseline"
+    value: ${{ steps.analyze.outputs.percent_change }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies
+      shell: bash
+      run: npm install --prefix ${{ github.action_path }}
+
+    - name: Restore CI history cache
+      id: restore_cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ci-guard-data/history.json
+        key: ci-guard-history-${{ github.repository_id }}-${{ github.run_id }}
+        restore-keys: |
+          ci-guard-history-${{ github.repository_id }}-
+
+    - name: Analyze build times
+      id: analyze
+      shell: bash
+      env:
+        INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
+        CI_GUARD_HISTORY_PATH: ci-guard-data/history.json
+        CI_GUARD_THRESHOLD_PCT: ${{ inputs.regression-threshold }}
+        CI_GUARD_BASELINE_WINDOW: ${{ inputs.baseline-window }}
+      run: node ${{ github.action_path }}/scripts/analyze.js
+
+    - name: Save updated CI history cache
+      if: always() && steps.analyze.outcome == 'success'
+      uses: actions/cache/save@v4
+      with:
+        path: ci-guard-data/history.json
+        key: ci-guard-history-${{ github.repository_id }}-${{ github.run_id }}
+
+    - name: Post or update PR comment
+      if: steps.analyze.outputs.has_data == 'true'
+      shell: bash
+      env:
+        INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
+        INPUT_HAS_DATA: ${{ steps.analyze.outputs.has_data }}
+        INPUT_CURRENT_SECONDS: ${{ steps.analyze.outputs.current_seconds }}
+        INPUT_BASELINE_SECONDS: ${{ steps.analyze.outputs.baseline_seconds }}
+        INPUT_PERCENT_CHANGE: ${{ steps.analyze.outputs.percent_change }}
+        INPUT_IS_REGRESSION: ${{ steps.analyze.outputs.is_regression }}
+        INPUT_JOB_BREAKDOWN: ${{ steps.analyze.outputs.job_breakdown }}
+        INPUT_RECENT_RUNS: ${{ steps.analyze.outputs.recent_runs }}
+      run: node ${{ github.action_path }}/scripts/comment.js
